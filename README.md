@@ -1,2 +1,2 @@
-# benolo_beta
+# benolo
 MVP Benolo
