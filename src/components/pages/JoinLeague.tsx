@@ -100,6 +100,7 @@ const mapRowToLeague = (row: LeagueRow, memberCount: number) => {
     startMinParticipants: minParticipants,
     startedAt: row.started_at ?? null,
     hasStarted,
+    createdAt: row.created_at,
   };
 };
 

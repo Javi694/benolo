@@ -4,6 +4,15 @@ const nextConfig = {
   experimental: {
     typedRoutes: true,
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "crests.football-data.org",
+      },
+    ],
+    dangerouslyAllowSVG: true,
+  },
 };
 
 export default nextConfig;

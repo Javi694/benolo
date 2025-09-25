@@ -1,3 +1,5 @@
 # Scripts
 
-- `seed-matches.ts`: inserts demo matches into existing leagues using Supabase REST API. Use with `ts-node` or execute via `npx ts-node scripts/seed-matches.ts` after setting `.env.local` with Supabase credentials.
+- `import-fixtures.ts`: calls the `sync-matches` edge function for one or more league IDs. Usage: `ts-node scripts/import-fixtures.ts <league-id> [<league-id> ...]` with Supabase URL + service key available in `.env.local`.
+- `seed-matches.ts`: legacy helper that inserts demo matches directly via Supabase REST if you need placeholder fixtures while developing offline.
+- `compute-leaderboard.ts` / `update-points.ts`: helper utilities to recompute leaderboard data locally.

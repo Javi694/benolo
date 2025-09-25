@@ -358,54 +358,54 @@ export const CHAMPIONSHIPS = [
     name: 'Premier League',
     country: 'England',
     logo: '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
-    season: '2024-25',
+    season: '2025-26',
     active: true,
-    endDate: '2025-05-25'
+    endDate: '2026-05-17'
   },
   {
     id: 'champions-league',
     name: 'Champions League',
     country: 'Europe',
     logo: '🏆',
-    season: '2024-25',
+    season: '2025-26',
     active: true,
-    endDate: '2025-05-31'
+    endDate: '2026-05-30'
   },
   {
     id: 'la-liga',
     name: 'La Liga',
     country: 'Spain',
     logo: '🇪🇸',
-    season: '2024-25',
+    season: '2025-26',
     active: true,
-    endDate: '2025-05-18'
+    endDate: '2026-05-24'
   },
   {
     id: 'serie-a',
     name: 'Serie A',
     country: 'Italy',
     logo: '🇮🇹',
-    season: '2024-25',
+    season: '2025-26',
     active: true,
-    endDate: '2025-05-25'
+    endDate: '2026-05-24'
   },
   {
     id: 'bundesliga',
     name: 'Bundesliga',
     country: 'Germany',
     logo: '🇩🇪',
-    season: '2024-25',
+    season: '2025-26',
     active: true,
-    endDate: '2025-05-17'
+    endDate: '2026-05-16'
   },
   {
     id: 'ligue-1',
     name: 'Ligue 1',
     country: 'France',
     logo: '🇫🇷',
-    season: '2024-25',
+    season: '2025-26',
     active: true,
-    endDate: '2025-05-24'
+    endDate: '2026-05-16'
   },
   {
     id: 'nba',

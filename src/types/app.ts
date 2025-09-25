@@ -34,6 +34,7 @@ export interface LeagueSummary {
   creatorId?: string;
   isPublic?: boolean;
   isPaid?: boolean;
+  createdAt?: string;
   signupDeadline?: string | null;
   durationType?: string | null;
   durationValue?: number | null;

@@ -1,42 +1,75 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import {
   AlertTriangle,
+  CalendarDays,
+  Check,
+  ChevronRight,
   Clock,
-  Target,
-  Trophy,
-  Users,
-  Zap,
+  Copy,
   Loader2,
   Shield,
+  Users,
+  XCircle,
 } from "lucide-react";
 
+import { supabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { supabaseBrowserClient } from "@/lib/supabase/client";
-import { hasLeagueStarted } from "@/lib/leagues/start";
+import { Input } from "@/components/ui/input";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type {
   DemoUser,
   LeagueSummary,
   TranslationAwareProps,
-  LeagueMatch,
-  LeaguePrediction,
 } from "@/types/app";
 
-interface DemoMatch {
+interface LeagueInfo {
   id: string;
-  homeTeam: string;
-  awayTeam: string;
-  matchDate: string;
-  status: "upcoming" | "live" | "finished";
+  name: string;
+  championship?: string | null;
+  createdAt?: string | null;
+  startAt?: string | null;
+  startedAt?: string | null;
+}
+
+interface MatchRecord {
+  id: string;
+  league_id: string;
+  external_ref?: string | null;
+  home_team: string;
+  away_team: string;
+  start_at: string;
+  status: string;
+  metadata?: Record<string, unknown> | null;
+  home_score?: number | null;
+  away_score?: number | null;
+}
+
+interface PredictionRow {
+  match_id: string;
+  league_id: string;
+  home_score: number | null;
+  away_score: number | null;
+  confident: boolean | null;
+  points?: number | null;
+  status?: string | null;
+  updated_at?: string | null;
+}
+
+interface StoredPredictionMeta {
+  matchId: string;
+  leagueId: string;
+  points?: number | null;
+  status?: string | null;
+  updatedAt?: string | null;
 }
 
 interface PredictionState {
@@ -45,10 +78,38 @@ interface PredictionState {
   confident: boolean;
 }
 
-interface LeaderboardEntry {
-  user_id: string;
-  total_points: number;
-  displayName?: string | null;
+interface AggregatedLeagueMatch {
+  matchId: string;
+  leagueId: string;
+  leagueName: string;
+  leagueCreatedAt?: string | null;
+  leagueStartAt?: string | null;
+  status: string;
+  startAt: string;
+  locked: boolean;
+  matchHomeScore?: number | null;
+  matchAwayScore?: number | null;
+}
+
+interface AggregatedMatch {
+  unifiedId: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeCrest?: string | null;
+  awayCrest?: string | null;
+  startAt: string;
+  matchday?: number | null;
+  competitionName?: string | null;
+  competitionCode?: string | null;
+  leagues: AggregatedLeagueMatch[];
+}
+
+interface MatchSection {
+  id: string;
+  label: string;
+  description?: string;
+  matches: AggregatedMatch[];
+  sortKey: number;
 }
 
 interface MatchBettingProps extends TranslationAwareProps {
@@ -56,6 +117,19 @@ interface MatchBettingProps extends TranslationAwareProps {
   selectedLeague: LeagueSummary | null;
   onBack: () => void;
 }
+
+const MATCH_LOCK_STATUSES = new Set([
+  "live",
+  "in_play",
+  "finished",
+  "completed",
+  "canceled",
+  "postponed",
+]);
+
+const createPredictionKey = (matchId: string, leagueId: string) => `${matchId}:${leagueId}`;
+
+const parseScoreInput = (value: string) => value.replace(/[^0-9]/g, "").slice(0, 3);
 
 const formatMatchDate = (isoString: string) =>
   new Date(isoString).toLocaleString(undefined, {
@@ -66,27 +140,130 @@ const formatMatchDate = (isoString: string) =>
 const timeUntilMatch = (isoString: string) => {
   const diff = new Date(isoString).getTime() - Date.now();
   if (diff <= 0) {
-    return "Starting";
+    return "En cours";
   }
   const hours = Math.floor(diff / (1000 * 60 * 60));
   const minutes = Math.floor((diff / (1000 * 60)) % 60);
   if (hours >= 24) {
     const days = Math.floor(hours / 24);
-    return `${days}d ${hours % 24}h`;
+    return `${days}j ${hours % 24}h`;
   }
   return `${hours}h ${minutes}m`;
 };
 
-const mapRowToMatch = (row: Partial<LeagueMatch> & { id: string }): DemoMatch => ({
-  id: row.id,
-  homeTeam: row.homeTeam ?? row.home_team ?? "Home",
-  awayTeam: row.awayTeam ?? row.away_team ?? "Away",
-  matchDate: row.startAt ?? row.start_at ?? new Date().toISOString(),
-  status:
-    row.status === "live" || row.status === "completed"
-      ? row.status
-      : "upcoming",
-});
+const isLocked = (status: string | null | undefined, startAt: string) => {
+  const normalized = (status ?? "").toLowerCase();
+  if (MATCH_LOCK_STATUSES.has(normalized)) {
+    return true;
+  }
+  const kickoff = new Date(startAt).getTime();
+  if (Number.isNaN(kickoff)) {
+    return false;
+  }
+  return kickoff <= Date.now();
+};
+
+const shouldAppearInHistory = (entry: AggregatedLeagueMatch) => {
+  if (!entry.locked) {
+    return false;
+  }
+  if (!entry.leagueCreatedAt && !entry.leagueStartAt) {
+    return true;
+  }
+  const referenceDate = entry.leagueStartAt ?? entry.leagueCreatedAt;
+  if (!referenceDate) {
+    return true;
+  }
+  const kickoff = new Date(entry.startAt).getTime();
+  const reference = new Date(referenceDate).getTime();
+  if (Number.isNaN(kickoff) || Number.isNaN(reference)) {
+    return true;
+  }
+  return kickoff >= reference;
+};
+
+const buildSections = (
+  matches: AggregatedMatch[],
+  t: MatchBettingProps["translations"],
+) => {
+  const sections = new Map<string, MatchSection>();
+
+  matches.forEach((match) => {
+    const competition = match.competitionName ?? t.defaultCompetitionLabel ?? "Compétition";
+    const matchday = match.matchday != null ? Number(match.matchday) : null;
+    const sectionKey = `${match.competitionCode ?? competition}::${matchday ?? "autres"}`;
+    const labelBase = competition.trim() === "" ? "Compétition" : competition;
+    const label = matchday != null
+      ? `${labelBase} — ${t.matchdayTitle ? t.matchdayTitle.replace("{number}", String(matchday)) : `Journée ${matchday}`}`
+      : labelBase;
+
+    const existing = sections.get(sectionKey);
+    const matchSort = new Date(match.startAt).getTime();
+
+    if (existing) {
+      existing.matches.push(match);
+      if (matchSort < existing.sortKey) {
+        existing.sortKey = matchSort;
+      }
+      return;
+    }
+
+    sections.set(sectionKey, {
+      id: sectionKey,
+      label,
+      matches: [match],
+      sortKey: matchSort,
+    });
+  });
+
+  return Array.from(sections.values())
+    .sort((a, b) => a.sortKey - b.sortKey)
+    .map((section) => ({
+      ...section,
+      matches: section.matches.sort((a, b) => {
+        const aDate = new Date(a.startAt).getTime();
+        const bDate = new Date(b.startAt).getTime();
+        if (aDate === bDate) {
+          return a.homeTeam.localeCompare(b.homeTeam);
+        }
+        return aDate - bDate;
+      }),
+    }));
+};
+
+const teamCrest = (metadata: Record<string, unknown> | null | undefined, key: "homeCrest" | "awayCrest") => {
+  if (!metadata) {
+    return null;
+  }
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+};
+
+const metadataNumber = (metadata: Record<string, unknown> | null | undefined, key: string) => {
+  if (!metadata) {
+    return null;
+  }
+  const raw = metadata[key];
+  if (typeof raw === "number") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
+const metadataString = (metadata: Record<string, unknown> | null | undefined, key: string) => {
+  if (!metadata) {
+    return null;
+  }
+  const raw = metadata[key];
+  if (typeof raw === "string") {
+    return raw;
+  }
+  return null;
+};
 
 export function MatchBetting({
   user,
@@ -95,266 +272,853 @@ export function MatchBetting({
   translations: t,
 }: MatchBettingProps) {
   const supabase = supabaseBrowserClient;
-  const [activeTab, setActiveTab] = useState("available");
-  const [autoStake, setAutoStake] = useState(true);
-  const [matches, setMatches] = useState<DemoMatch[]>([]);
-  const [predictions, setPredictions] = useState<Record<string, PredictionState>>({});
-  const [loadingMatches, setLoadingMatches] = useState<boolean>(Boolean(supabase && selectedLeague?.id));
-  const [matchesError, setMatchesError] = useState<string | null>(null);
-  const [savingMatchId, setSavingMatchId] = useState<string | null>(null);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [loadingLeaderboard, setLoadingLeaderboard] = useState<boolean>(Boolean(supabase && selectedLeague?.id));
-  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
 
-  const resetPredictions = useCallback(() => {
-    setPredictions({});
-  }, []);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(Boolean(user && supabase));
+  const [leagueInfos, setLeagueInfos] = useState<Record<string, LeagueInfo>>({});
+  const [matchRows, setMatchRows] = useState<MatchRecord[]>([]);
+  const [predictionStates, setPredictionStates] = useState<Record<string, PredictionState>>({});
+  const [predictionMeta, setPredictionMeta] = useState<Record<string, StoredPredictionMeta>>({});
+  const [activeLeagueIds, setActiveLeagueIds] = useState<string[]>([]);
+
+  const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const latestPayload = useRef<Map<string, { matchId: string; leagueId: string; homeScore: number; awayScore: number }>>(new Map());
+  const [saveStatus, setSaveStatus] = useState<Record<string, "idle" | "saving" | "saved" | "error">>({});
+  const [saveErrorMessage, setSaveErrorMessage] = useState<Record<string, string | null>>({});
+
+  const allLeagueIds = useMemo(
+    () => Object.keys(leagueInfos),
+    [leagueInfos],
+  );
+
+  const leagueList = useMemo(
+    () => allLeagueIds.map((id) => leagueInfos[id]).filter(Boolean),
+    [allLeagueIds, leagueInfos],
+  );
 
   useEffect(() => {
-    resetPredictions();
-    setLeaderboard([]);
-    setLeaderboardError(null);
-  }, [selectedLeague?.id, resetPredictions]);
-
-  useEffect(() => {
-    if (!selectedLeague?.id) {
-      setMatches([]);
-      setLoadingMatches(false);
-      return;
-    }
-
-    if (!supabase) {
-      setMatches([]);
-      setMatchesError("Supabase is not configured.");
-      setLoadingMatches(false);
+    if (!user?.id || !supabase) {
+      setLeagueInfos({});
+      setMatchRows([]);
+      setPredictionStates({});
+      setPredictionMeta({});
+      setActiveLeagueIds([]);
+      setLoading(false);
       return;
     }
 
     let isMounted = true;
 
     const fetchData = async () => {
-      setLoadingMatches(true);
-      setMatchesError(null);
+      setLoading(true);
+      setFetchError(null);
 
-      const { data: matchRows, error: matchesErr } = await supabase
+      const leagueIdSet = new Set<string>();
+
+      if (selectedLeague?.id) {
+        leagueIdSet.add(selectedLeague.id);
+      }
+
+      const { data: membershipRows, error: membershipError } = await supabase
+        .from("league_members")
+        .select("league_id")
+        .eq("user_id", user.id);
+
+      if (membershipError) {
+        if (!isMounted) {
+          return;
+        }
+        setFetchError(membershipError.message);
+        setLeagueInfos({});
+        setMatchRows([]);
+        setPredictionStates({});
+        setPredictionMeta({});
+        setActiveLeagueIds([]);
+        setLoading(false);
+        return;
+      }
+
+      (membershipRows ?? []).forEach((row: { league_id: string | null }) => {
+        if (row.league_id) {
+          leagueIdSet.add(row.league_id);
+        }
+      });
+
+      const leagueIds = Array.from(leagueIdSet);
+
+      if (leagueIds.length === 0) {
+        if (!isMounted) {
+          return;
+        }
+        setLeagueInfos({});
+        setMatchRows([]);
+        setPredictionStates({});
+        setPredictionMeta({});
+        setActiveLeagueIds([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: leaguesData, error: leaguesError } = await supabase
+        .from("leagues")
+        .select("id, name, championship, created_at, start_at, started_at")
+        .in("id", leagueIds);
+
+      if (leaguesError) {
+        if (!isMounted) {
+          return;
+        }
+        setFetchError(leaguesError.message);
+        setLeagueInfos({});
+        setMatchRows([]);
+        setPredictionStates({});
+        setPredictionMeta({});
+        setActiveLeagueIds([]);
+        setLoading(false);
+        return;
+      }
+
+      const infoMap: Record<string, LeagueInfo> = {};
+      (leaguesData ?? []).forEach((row: any) => {
+        infoMap[row.id as string] = {
+          id: row.id as string,
+          name: (row.name as string) ?? "Benolo League",
+          championship: row.championship ?? null,
+          createdAt: row.created_at ?? null,
+          startAt: row.start_at ?? null,
+          startedAt: row.started_at ?? null,
+        };
+      });
+
+      const { data: matchesData, error: matchesError } = await supabase
         .from("league_matches")
-        .select("id, home_team, away_team, start_at, status")
-        .eq("league_id", selectedLeague.id)
+        .select(
+          "id, league_id, external_ref, home_team, away_team, start_at, status, metadata, home_score, away_score",
+        )
+        .in("league_id", leagueIds)
         .order("start_at", { ascending: true });
+
+      if (matchesError) {
+        if (!isMounted) {
+          return;
+        }
+        setFetchError(matchesError.message);
+        setLeagueInfos(infoMap);
+        setMatchRows([]);
+        setPredictionStates({});
+        setPredictionMeta({});
+        setActiveLeagueIds((prev) => {
+          if (selectedLeague?.id && leagueIds.includes(selectedLeague.id)) {
+            return [selectedLeague.id];
+          }
+          const validPrev = prev.filter((id) => leagueIds.includes(id));
+          return validPrev.length > 0 ? validPrev : leagueIds;
+        });
+        setLoading(false);
+        return;
+      }
+
+      const { data: predictionsData, error: predictionsError } = await supabase
+        .from("league_predictions")
+        .select("match_id, league_id, home_score, away_score, confident, points, status, updated_at")
+        .eq("user_id", user.id)
+        .in("league_id", leagueIds);
+
+      if (predictionsError) {
+        if (!isMounted) {
+          return;
+        }
+        setFetchError(predictionsError.message);
+        setLeagueInfos(infoMap);
+        setMatchRows((matchesData ?? []) as MatchRecord[]);
+        setPredictionStates({});
+        setPredictionMeta({});
+        setActiveLeagueIds((prev) => {
+          if (selectedLeague?.id && leagueIds.includes(selectedLeague.id)) {
+            return [selectedLeague.id];
+          }
+          const validPrev = prev.filter((id) => leagueIds.includes(id));
+          return validPrev.length > 0 ? validPrev : leagueIds;
+        });
+        setLoading(false);
+        return;
+      }
 
       if (!isMounted) {
         return;
       }
 
-      if (matchesErr) {
-        setMatchesError(matchesErr.message);
-        setMatches([]);
-        setLoadingMatches(false);
-        return;
-      }
+      const nextPredictionState: Record<string, PredictionState> = {};
+      const nextPredictionMeta: Record<string, StoredPredictionMeta> = {};
 
-      const transformed = (matchRows ?? []).map((row: any) =>
-        mapRowToMatch({ ...row, startAt: row.start_at }),
-      );
-
-      setMatches(transformed);
-
-      if (user?.id) {
-        const { data: predictionRows, error: predictionsErr } = await supabase
-          .from("league_predictions")
-          .select("match_id, home_score, away_score, confident")
-          .eq("league_id", selectedLeague.id)
-          .eq("user_id", user.id);
-
-        if (isMounted) {
-          if (predictionsErr) {
-            setMatchesError(predictionsErr.message);
-          } else {
-            const initial: Record<string, PredictionState> = {};
-            (predictionRows ?? []).forEach((prediction: any) => {
-              initial[prediction.match_id] = {
-                homeScore: prediction.home_score?.toString() ?? "",
-                awayScore: prediction.away_score?.toString() ?? "",
-                confident: Boolean(prediction.confident),
-              };
-            });
-            setPredictions(initial);
-          }
+      (predictionsData ?? []).forEach((row: PredictionRow) => {
+        if (!row.match_id || !row.league_id) {
+          return;
         }
-      }
+        const key = createPredictionKey(row.match_id, row.league_id);
+        nextPredictionState[key] = {
+          homeScore: row.home_score != null ? String(row.home_score) : "",
+          awayScore: row.away_score != null ? String(row.away_score) : "",
+          confident: Boolean(row.confident),
+        };
+        nextPredictionMeta[key] = {
+          matchId: row.match_id,
+          leagueId: row.league_id,
+          points: row.points ?? null,
+          status: row.status ?? null,
+          updatedAt: row.updated_at ?? null,
+        };
+      });
 
-      setLoadingMatches(false);
+      setLeagueInfos(infoMap);
+      setMatchRows((matchesData ?? []) as MatchRecord[]);
+      setPredictionStates(nextPredictionState);
+      setPredictionMeta(nextPredictionMeta);
+      setActiveLeagueIds((prev) => {
+        if (selectedLeague?.id && leagueIds.includes(selectedLeague.id)) {
+          return [selectedLeague.id];
+        }
+        const validPrev = prev.filter((id) => leagueIds.includes(id));
+        return validPrev.length > 0 ? validPrev : leagueIds;
+      });
+      setLoading(false);
     };
 
     void fetchData();
 
+    const timersRef = saveTimers.current;
+    const payloadRef = latestPayload.current;
+
     return () => {
       isMounted = false;
+      timersRef.forEach((timer) => {
+        clearTimeout(timer);
+      });
+      timersRef.clear();
+      payloadRef.clear();
     };
   }, [selectedLeague?.id, supabase, user?.id]);
 
   useEffect(() => {
-    if (!selectedLeague?.id || !supabase) {
-      setLeaderboard([]);
-      setLoadingLeaderboard(false);
+    if (!selectedLeague?.id) {
       return;
     }
+    if (!leagueInfos[selectedLeague.id]) {
+      return;
+    }
+    setActiveLeagueIds((prev) => {
+      if (prev.length === 1 && prev[0] === selectedLeague.id) {
+        return prev;
+      }
+      return [selectedLeague.id];
+    });
+  }, [leagueInfos, selectedLeague?.id]);
 
-    let isMounted = true;
+  const filteredMatches = useMemo(() => {
+    if (activeLeagueIds.length === 0) {
+      return matchRows;
+    }
+    const activeSet = new Set(activeLeagueIds);
+    return matchRows.filter((row) => activeSet.has(row.league_id));
+  }, [activeLeagueIds, matchRows]);
 
-    const fetchLeaderboard = async () => {
-      setLoadingLeaderboard(true);
-      setLeaderboardError(null);
+  const aggregatedMatches = useMemo(() => {
+    const map = new Map<string, AggregatedMatch>();
 
-      const { data, error } = await supabase
-        .from("league_leaderboard")
-        .select("league_id, user_id, total_points")
-        .eq("league_id", selectedLeague.id)
-        .order("total_points", { ascending: false })
-        .limit(10);
+    filteredMatches.forEach((row) => {
+      const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+      const externalId = typeof row.external_ref === "string" && row.external_ref.trim() !== ""
+        ? row.external_ref.trim()
+        : `${row.home_team.toLowerCase()}::${row.away_team.toLowerCase()}::${new Date(row.start_at).toISOString()}`;
+      const key = externalId;
 
-      if (!isMounted) {
+      const league = leagueInfos[row.league_id];
+      const matchday = metadataNumber(metadata, "matchday");
+      const competitionName = metadataString(metadata, "competitionName") ?? metadataString(metadata, "competition") ?? league?.championship ?? null;
+      const competitionCode = metadataString(metadata, "competitionCode") ?? null;
+
+      const locked = isLocked(row.status, row.start_at);
+      const leagueEntry: AggregatedLeagueMatch = {
+        matchId: row.id,
+        leagueId: row.league_id,
+        leagueName: league?.name ?? "Benolo League",
+        leagueCreatedAt: league?.createdAt ?? null,
+        leagueStartAt: league?.startedAt ?? league?.startAt ?? null,
+        status: row.status,
+        startAt: row.start_at,
+        locked,
+        matchHomeScore: row.home_score ?? null,
+        matchAwayScore: row.away_score ?? null,
+      };
+
+      const crestHome = teamCrest(metadata, "homeCrest");
+      const crestAway = teamCrest(metadata, "awayCrest");
+
+      const existing = map.get(key);
+      if (existing) {
+        existing.leagues.push(leagueEntry);
+        if (new Date(row.start_at).getTime() < new Date(existing.startAt).getTime()) {
+          existing.startAt = row.start_at;
+        }
+        if (!existing.homeCrest && crestHome) {
+          existing.homeCrest = crestHome;
+        }
+        if (!existing.awayCrest && crestAway) {
+          existing.awayCrest = crestAway;
+        }
         return;
       }
 
-      if (error) {
-        setLeaderboardError(error.message);
-        setLeaderboard([]);
-      } else {
-        let rows: LeaderboardEntry[] = (data ?? []) as LeaderboardEntry[];
-        const userIds = Array.from(new Set(rows.map((row) => row.user_id).filter(Boolean)));
+      map.set(key, {
+        unifiedId: key,
+        homeTeam: row.home_team,
+        awayTeam: row.away_team,
+        homeCrest: crestHome,
+        awayCrest: crestAway,
+        startAt: row.start_at,
+        matchday,
+        competitionName,
+        competitionCode,
+        leagues: [leagueEntry],
+      });
+    });
 
-        if (userIds.length > 0) {
-          const { data: profileRows, error: profileError } = await supabase
-            .from("profiles")
-            .select("id, display_name")
-            .in("id", userIds);
-
-          if (profileError) {
-            setLeaderboardError(profileError.message);
-          } else {
-            const nameById = new Map<string, string | null>();
-            (profileRows ?? []).forEach((profile: any) => {
-              nameById.set(profile.id as string, profile.display_name ?? null);
-            });
-
-            rows = rows.map((row) => ({
-              ...row,
-              displayName: nameById.get(row.user_id) ?? null,
-            }));
-          }
-        }
-
-        setLeaderboard(rows);
+    return Array.from(map.values()).sort((a, b) => {
+      const aDate = new Date(a.startAt).getTime();
+      const bDate = new Date(b.startAt).getTime();
+      if (aDate === bDate) {
+        return a.homeTeam.localeCompare(b.homeTeam);
       }
+      return aDate - bDate;
+    });
+  }, [filteredMatches, leagueInfos]);
 
-      setLoadingLeaderboard(false);
-    };
+  const upcomingMatches = useMemo(() => aggregatedMatches
+    .map((match) => ({
+      ...match,
+      leagues: match.leagues.filter((entry) => !entry.locked),
+    }))
+    .filter((match) => match.leagues.length > 0), [aggregatedMatches]);
 
-    void fetchLeaderboard();
+  const historyMatches = useMemo(() => aggregatedMatches
+    .map((match) => ({
+      ...match,
+      leagues: match.leagues.filter((entry) => shouldAppearInHistory(entry)),
+    }))
+    .filter((match) => match.leagues.length > 0), [aggregatedMatches]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedLeague?.id, supabase]);
+  const upcomingSections = useMemo(
+    () => buildSections(upcomingMatches, t),
+    [t, upcomingMatches],
+  );
 
-  const handlePredictionChange = (
-    matchId: string,
-    field: keyof PredictionState,
-    value: string | boolean,
-  ) => {
-    setPredictions((prev) => ({
-      ...prev,
-      [matchId]: {
-        homeScore: prev[matchId]?.homeScore ?? "",
-        awayScore: prev[matchId]?.awayScore ?? "",
-        confident: prev[matchId]?.confident ?? false,
-        ...prev[matchId],
-        [field]: value,
-      },
-    }));
-  };
+  const historySections = useMemo(
+    () => buildSections(historyMatches, t),
+    [t, historyMatches],
+  );
 
-  const leagueHasStarted = useMemo(() => hasLeagueStarted(selectedLeague), [selectedLeague]);
-
-  const isMatchLocked = useCallback((match: DemoMatch) => {
-    if (match.status === "live" || match.status === "finished" || match.status === "completed") {
-      return true;
+  const defaultUpcomingOpen = useMemo(() => {
+    if (upcomingSections.length === 0) {
+      return [] as string[];
     }
+    const [firstSection] = upcomingSections;
+    return [firstSection.id];
+  }, [upcomingSections]);
 
-    const startAt = new Date(match.matchDate).getTime();
-    if (Number.isNaN(startAt)) {
-      return false;
-    }
+  const scheduleSave = useCallback((matchId: string, leagueId: string, state: PredictionState) => {
+    const key = createPredictionKey(matchId, leagueId);
 
-    return startAt <= Date.now();
-  }, []);
-
-  const leagueLocked = !leagueHasStarted;
-  const participantTarget = selectedLeague?.startMinParticipants ?? null;
-  const participantsNow = Number(selectedLeague?.participants ?? 0);
-
-  const canSubmit = (match: DemoMatch) => {
-    if (leagueLocked || isMatchLocked(match)) {
-      return false;
-    }
-    const prediction = predictions[match.id];
-    if (!prediction) return false;
-    return prediction.homeScore !== "" && prediction.awayScore !== "";
-  };
-
-  const submitPrediction = async (match: DemoMatch) => {
-    if (leagueLocked) {
-      window.alert(t.leagueNotStarted || "Les pronostics ouvriront dès le lancement de la ligue." );
+    if (state.homeScore === "" || state.awayScore === "") {
       return;
     }
 
-    if (isMatchLocked(match)) {
-      window.alert(t.predictionClosed || "Predictions are closed for this match.");
-      return;
-    }
-
-    if (!canSubmit(match)) {
-      window.alert(t.fillScores || "Please enter a prediction for both teams.");
-      return;
-    }
-
-    const current = predictions[match.id];
-    if (!current) {
-      return;
-    }
-
-    const homeScore = Number(current.homeScore);
-    const awayScore = Number(current.awayScore);
+    const homeScore = Number.parseInt(state.homeScore, 10);
+    const awayScore = Number.parseInt(state.awayScore, 10);
 
     if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) {
-      window.alert(t.invalidScores || "Invalid scores provided.");
       return;
     }
 
-    if (!supabase || !user || !selectedLeague?.id) {
-      window.alert(t.predictionSavedLocally || "Prediction saved locally." );
+    latestPayload.current.set(key, { matchId, leagueId, homeScore, awayScore });
+
+    if (saveTimers.current.has(key)) {
+      clearTimeout(saveTimers.current.get(key));
+    }
+
+    const timer = setTimeout(() => {
+      void (async () => {
+        if (!supabase || !user?.id) {
+          setSaveStatus((prev) => ({ ...prev, [key]: "error" }));
+          setSaveErrorMessage((prev) => ({ ...prev, [key]: t.supabaseUnavailable || "Impossible d'enregistrer pour le moment." }));
+          return;
+        }
+
+        const payload = latestPayload.current.get(key);
+        if (!payload) {
+          return;
+        }
+
+        setSaveStatus((prev) => ({ ...prev, [key]: "saving" }));
+        setSaveErrorMessage((prev) => ({ ...prev, [key]: null }));
+
+        const { error } = await supabase
+          .from("league_predictions")
+          .upsert(
+            {
+              match_id: payload.matchId,
+              league_id: payload.leagueId,
+              user_id: user.id,
+              home_score: payload.homeScore,
+              away_score: payload.awayScore,
+              confident: false,
+            },
+            { onConflict: "match_id,user_id" },
+          );
+
+        if (error) {
+          setSaveStatus((prev) => ({ ...prev, [key]: "error" }));
+          setSaveErrorMessage((prev) => ({ ...prev, [key]: error.message }));
+          return;
+        }
+
+        setSaveStatus((prev) => ({ ...prev, [key]: "saved" }));
+        setSaveErrorMessage((prev) => ({ ...prev, [key]: null }));
+        setPredictionMeta((prev) => ({
+          ...prev,
+          [key]: {
+            matchId: payload.matchId,
+            leagueId: payload.leagueId,
+            points: prev[key]?.points ?? null,
+            status: prev[key]?.status ?? "pending",
+            updatedAt: new Date().toISOString(),
+          },
+        }));
+
+        setTimeout(() => {
+          setSaveStatus((prev) => ({
+            ...prev,
+            [key]: "idle",
+          }));
+        }, 2000);
+      })();
+    }, 600);
+
+    saveTimers.current.set(key, timer);
+  }, [supabase, t.supabaseUnavailable, user?.id]);
+
+  const handleScoreChange = useCallback((matchId: string, leagueId: string, side: "home" | "away", rawValue: string) => {
+    setPredictionStates((prev) => {
+      const key = createPredictionKey(matchId, leagueId);
+      const nextValue = parseScoreInput(rawValue);
+      const previous = prev[key];
+      const updated: PredictionState = {
+        homeScore: previous?.homeScore ?? "",
+        awayScore: previous?.awayScore ?? "",
+        confident: previous?.confident ?? false,
+      };
+      if (side === "home") {
+        updated.homeScore = nextValue;
+      } else {
+        updated.awayScore = nextValue;
+      }
+
+      scheduleSave(matchId, leagueId, updated);
+
+      return {
+        ...prev,
+        [key]: updated,
+      };
+    });
+  }, [scheduleSave]);
+
+
+  useEffect(() => {
+    const timersRef = saveTimers.current;
+
+    return () => {
+      timersRef.forEach((timer) => clearTimeout(timer));
+      timersRef.clear();
+    };
+  }, []);
+
+  const handleBlur = useCallback((matchId: string, leagueId: string) => {
+    const key = createPredictionKey(matchId, leagueId);
+    const state = predictionStates[key];
+    if (!state) {
+      return;
+    }
+    scheduleSave(matchId, leagueId, state);
+  }, [predictionStates, scheduleSave]);
+
+  const copyPredictionAcrossLeagues = useCallback((match: AggregatedMatch, sourceLeagueId: string) => {
+    const sourceEntry = match.leagues.find((entry) => entry.leagueId === sourceLeagueId);
+    if (!sourceEntry) {
+      return;
+    }
+    const sourceKey = createPredictionKey(sourceEntry.matchId, sourceEntry.leagueId);
+    const sourceState = predictionStates[sourceKey];
+    if (!sourceState || sourceState.homeScore === "" || sourceState.awayScore === "") {
+      window.alert(t.copyPredictionMissing || "Renseigne les deux scores avant de copier le pronostic.");
       return;
     }
 
-    setSavingMatchId(match.id);
-    const { error } = await supabase
-      .from("league_predictions")
-      .upsert({
-        match_id: match.id,
-        league_id: selectedLeague.id,
-        user_id: user.id,
-        home_score: homeScore,
-        away_score: awayScore,
-        confident: current.confident,
-      });
-    setSavingMatchId(null);
+    const sanitizedHome = parseScoreInput(sourceState.homeScore);
+    const sanitizedAway = parseScoreInput(sourceState.awayScore);
 
-    if (error) {
-      window.alert(error.message);
-    } else {
-      window.alert(t.predictionSaved || "Prediction saved!");
+    match.leagues.forEach((entry) => {
+      if (entry.leagueId === sourceLeagueId) {
+        return;
+      }
+      if (entry.locked) {
+        return;
+      }
+      const targetKey = createPredictionKey(entry.matchId, entry.leagueId);
+      const nextState: PredictionState = {
+        homeScore: sanitizedHome,
+        awayScore: sanitizedAway,
+        confident: predictionStates[targetKey]?.confident ?? false,
+      };
+      setPredictionStates((prev) => ({
+        ...prev,
+        [targetKey]: nextState,
+      }));
+      setTimeout(() => {
+        scheduleSave(entry.matchId, entry.leagueId, nextState);
+      }, 0);
+    });
+  }, [predictionStates, scheduleSave, t.copyPredictionMissing]);
+
+  const renderPredictionStatus = (key: string) => {
+    const status = saveStatus[key];
+    const message = saveErrorMessage[key];
+    if (status === "saving") {
+      return (
+        <Badge variant="secondary" className="gap-1 bg-amber-100 text-amber-700">
+          <Loader2 className="size-3 animate-spin" />
+          {t.savingPrediction || "Enregistrement..."}
+        </Badge>
+      );
     }
+    if (status === "saved") {
+      return (
+        <Badge className="gap-1 bg-emerald-100 text-emerald-700">
+          <Check className="size-3" />
+          {t.predictionSaved || "Sauvegardé"}
+        </Badge>
+      );
+    }
+    if (status === "error") {
+      return (
+        <Badge variant="destructive" className="gap-1">
+          <XCircle className="size-3" />
+          {message ?? t.predictionSaveFailed || "Erreur"}
+        </Badge>
+      );
+    }
+    return null;
+  };
+
+  const renderLeagueFilters = () => {
+    if (leagueList.length <= 1) {
+      return null;
+    }
+
+    const selectedSet = new Set(activeLeagueIds);
+    const showAll = activeLeagueIds.length === 0 || activeLeagueIds.length === leagueList.length;
+
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <Shield className="size-3.5" />
+          {t.leagueFiltersLabel || "Ligues visibles"}
+        </div>
+        <ToggleGroup
+          type="multiple"
+          className="flex flex-wrap gap-2"
+          value={showAll ? leagueList.map((league) => league.id) : activeLeagueIds}
+          onValueChange={(value) => {
+            if (value.length === leagueList.length) {
+              setActiveLeagueIds([]);
+              return;
+            }
+            if (value.length === 0) {
+              setActiveLeagueIds(leagueList.map((league) => league.id));
+              return;
+            }
+            setActiveLeagueIds(value);
+          }}
+        >
+          {leagueList.map((league) => (
+            <ToggleGroupItem
+              key={league.id}
+              value={league.id}
+              className="data-[state=on]:bg-emerald-100 data-[state=on]:text-emerald-700"
+            >
+              {league.name}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8"
+          onClick={() => {
+            if (selectedSet.size === leagueList.length) {
+              setActiveLeagueIds([leagueList[0].id]);
+            } else {
+              setActiveLeagueIds(leagueList.map((league) => league.id));
+            }
+          }}
+        >
+          {selectedSet.size === leagueList.length
+            ? (t.leagueFilterFocusOne || "Ne garder qu'une ligue")
+            : (t.leagueFilterAll || "Tout afficher")}
+        </Button>
+      </div>
+    );
+  };
+
+  const renderMatchCard = (match: AggregatedMatch, tab: "upcoming" | "history") => {
+    return (
+      <Card key={match.unifiedId} className="border-slate-200 shadow-sm">
+        <CardHeader className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+              <CalendarDays className="size-3.5" />
+              {match.competitionName ?? t.defaultCompetitionLabel ?? "Compétition"}
+              <ChevronRight className="size-3" />
+              {match.matchday != null
+                ? (t.matchdayTitle ? t.matchdayTitle.replace("{number}", String(match.matchday)) : `Journée ${match.matchday}`)
+                : (t.matchdayUnknown || "Prochaines rencontres")}
+            </div>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Clock className="size-4" />
+              {formatMatchDate(match.startAt)}
+            </div>
+          </div>
+
+          <div className="grid gap-6 md:grid-cols-[1fr_auto_1fr] md:items-center">
+            <div className="flex flex-col items-center gap-3 text-center">
+              {match.homeCrest ? (
+                <Image
+                  src={match.homeCrest}
+                  alt={match.homeTeam}
+                  width={56}
+                  height={56}
+                  className="size-14 rounded-full border border-slate-200 bg-white object-contain p-1"
+                />
+              ) : (
+                <div className="size-14 rounded-full border border-dashed border-slate-200 bg-slate-50" />
+              )}
+              <span className="text-sm font-semibold text-slate-700 max-w-[140px]">
+                {match.homeTeam}
+              </span>
+            </div>
+            <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+              <span className="text-xs uppercase tracking-widest text-muted-foreground">vs</span>
+              {tab === "upcoming" ? (
+                <Badge className="gap-1 bg-emerald-100 text-emerald-700">
+                  <Users className="size-3" />
+                  {timeUntilMatch(match.startAt)}
+                </Badge>
+              ) : (
+                <Badge className="gap-1 bg-slate-200 text-slate-600">
+                  {t.matchFinished || "Terminé"}
+                </Badge>
+              )}
+            </div>
+            <div className="flex flex-col items-center gap-3 text-center">
+              {match.awayCrest ? (
+                <Image
+                  src={match.awayCrest}
+                  alt={match.awayTeam}
+                  width={56}
+                  height={56}
+                  className="size-14 rounded-full border border-slate-200 bg-white object-contain p-1"
+                />
+              ) : (
+                <div className="size-14 rounded-full border border-dashed border-slate-200 bg-slate-50" />
+              )}
+              <span className="text-sm font-semibold text-slate-700 max-w-[140px]">
+                {match.awayTeam}
+              </span>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {match.leagues.map((entry) => {
+            const key = createPredictionKey(entry.matchId, entry.leagueId);
+            const prediction = predictionStates[key] ?? { homeScore: "", awayScore: "", confident: false };
+            const meta = predictionMeta[key];
+            const statusBadge = renderPredictionStatus(key);
+
+            return (
+              <div
+                key={key}
+                className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">
+                      {entry.leagueName}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {entry.locked
+                        ? (t.predictionLocked || "Pronostic verrouillé")
+                        : (t.predictionOpen || "Pronostic ouvert")}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {statusBadge}
+                    {tab === "upcoming" && match.leagues.length > 1 && !entry.locked ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-2"
+                        onClick={() => copyPredictionAcrossLeagues(match, entry.leagueId)}
+                      >
+                        <Copy className="size-3.5" />
+                        {t.copyPrediction || "Répliquer le résultat sur les autres ligues"}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <Separator className="my-4" />
+
+                {tab === "upcoming" ? (
+                  <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-end">
+                    <div className="flex flex-col items-center gap-2 text-center md:items-start md:text-left">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        {match.homeTeam}
+                      </span>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        min={0}
+                        max={99}
+                        value={prediction.homeScore}
+                        onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "home", event.target.value)}
+                        onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
+                        disabled={entry.locked}
+                        className="w-full max-w-[120px] text-center text-lg"
+                      />
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+                      <span>{t.predictionSeparator || "Score"}</span>
+                      <Separator orientation="vertical" className="h-10" />
+                    </div>
+                    <div className="flex flex-col items-center gap-2 text-center md:items-end md:text-right">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        {match.awayTeam}
+                      </span>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        min={0}
+                        max={99}
+                        value={prediction.awayScore}
+                        onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "away", event.target.value)}
+                        onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
+                        disabled={entry.locked}
+                        className="w-full max-w-[120px] text-center text-lg"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
+                    <div className="rounded-lg bg-slate-50 p-4 text-sm md:text-left">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">
+                        {t.yourPrediction || "Ton pronostic"}
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-slate-800">
+                        {prediction.homeScore !== "" && prediction.awayScore !== ""
+                          ? `${prediction.homeScore} - ${prediction.awayScore}`
+                          : t.predictionMissing || "Non renseigné"}
+                      </p>
+                      {meta?.points != null ? (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {t.pointsEarned
+                            ? t.pointsEarned.replace("{points}", String(meta.points))
+                            : `Points gagnés : ${meta.points}`}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center justify-center">
+                      <Separator orientation="vertical" className="h-16" />
+                    </div>
+                    <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm md:text-right">
+                      <p className="text-xs font-semibold uppercase text-muted-foreground">
+                        {t.finalScore || "Score final"}
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-slate-800">
+                        {entry.matchHomeScore != null && entry.matchAwayScore != null
+                          ? `${entry.matchHomeScore} - ${entry.matchAwayScore}`
+                          : t.finalScorePending || "En attente"}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderMatches = (sections: MatchSection[], tab: "upcoming" | "history") => {
+    if (fetchError) {
+      return (
+        <Alert variant="destructive">
+          <AlertTriangle className="size-4" />
+          <AlertDescription>{fetchError}</AlertDescription>
+        </Alert>
+      );
+    }
+
+    if (loading) {
+      return (
+        <div className="flex min-h-[160px] items-center justify-center text-muted-foreground">
+          <Loader2 className="mr-2 size-5 animate-spin" />
+          {t.loading || "Chargement"}
+        </div>
+      );
+    }
+
+    if (sections.length === 0) {
+      return (
+        <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-muted-foreground">
+          {tab === "upcoming"
+            ? (t.noUpcomingMatches || "Aucun match disponible pour vos ligues.")
+            : (t.noHistoryMatches || "Encore aucun match terminé depuis ton inscription.")}
+        </div>
+      );
+    }
+
+    const defaultOpen = tab === "upcoming" ? defaultUpcomingOpen : [sections[0].id];
+
+    return (
+      <Accordion type="multiple" defaultValue={defaultOpen} className="space-y-3">
+        {sections.map((section) => (
+          <AccordionItem key={section.id} value={section.id} className="rounded-xl border border-slate-200 bg-white">
+            <AccordionTrigger className="px-4">
+              <div className="flex flex-col items-start gap-1">
+                <span className="text-sm font-semibold text-slate-800">{section.label}</span>
+                {section.description ? (
+                  <span className="text-xs text-muted-foreground">{section.description}</span>
+                ) : null}
+              </div>
+            </AccordionTrigger>
+            <AccordionContent className="space-y-4 px-4">
+              {section.matches.map((match) => renderMatchCard(match, tab))}
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    );
   };
 
   return (
@@ -362,208 +1126,65 @@ export function MatchBetting({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-sm uppercase tracking-wider text-emerald-500">
-            {t.betting || "Betting"}
+            {t.betting || "Pronostics"}
           </p>
           <h1 className="text-3xl font-bold text-slate-900">
-            {selectedLeague?.name || "Match Center"}
+            {t.predictionCenterTitle || "Centre des pronostics"}
           </h1>
           <p className="text-sm text-muted-foreground">
-            {t.bettingIntro || "Upcoming fixtures synced with your Benolo league."}
+            {t.predictionCenterSubtitle || "Retrouve tous tes matchs Benolo et saisis tes pronostics en un seul endroit."}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={onBack} className="gap-2">
-            {t.backToDashboard || "Back to dashboard"}
-          </Button>
-          <Button className="gap-2">
-            <Zap className="h-4 w-4" />
-            {t.quickStake || "Quick stake"}
-          </Button>
-        </div>
+        <Button variant="outline" onClick={onBack} className="gap-2">
+          {t.backToDashboard || "Retour"}
+        </Button>
       </div>
 
+      {renderLeagueFilters()}
+
       <Card className="shadow-md">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <Tabs defaultValue="upcoming" className="w-full">
           <CardHeader className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <CardTitle className="text-xl">{t.predictionOptions || "Prediction options"}</CardTitle>
+              <CardTitle className="text-xl">
+                {t.predictionTabsTitle || "Tes rencontres"}
+              </CardTitle>
               <CardDescription>
-                {t.predictionOptionsDesc || "Place score predictions and manage your staking preferences."}
+                {t.predictionTabsDescription || "Les matchs disponibles sont regroupés par compétition et par journée."}
               </CardDescription>
             </div>
             <TabsList>
-              <TabsTrigger value="available">{t.availableMatches || "Available"}</TabsTrigger>
-              <TabsTrigger value="history">{t.history || "History"}</TabsTrigger>
-              <TabsTrigger value="rules">{t.rules || "Rules"}</TabsTrigger>
+              <TabsTrigger value="upcoming">
+                {t.availableMatches || "À venir"}
+              </TabsTrigger>
+              <TabsTrigger value="history">
+                {t.history || "Historique"}
+              </TabsTrigger>
+              <TabsTrigger value="rules">
+                {t.rules || "Règles"}
+              </TabsTrigger>
             </TabsList>
           </CardHeader>
 
-          <CardContent>
-            <TabsContent value="available" className="space-y-6">
-              {matchesError && (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                  {matchesError}
-                </div>
-              )}
-
-              {leagueLocked && (
-                <Alert className="border-amber-200 bg-amber-50 text-amber-700">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>
-                    <span>
-                      {selectedLeague?.startCondition === "participants"
-                        ? (t.leagueStartAfterParticipantsDesc || "Cette ligue s'ouvrira dès que le seuil de joueurs sera atteint.")
-                        : (t.leagueStartAfterDateDesc || "Cette ligue ouvrira automatiquement à la date programmée.")}
-                    </span>
-                    {selectedLeague?.startCondition === "participants" && participantTarget != null && (
-                      <span className="mt-1 block text-xs">
-                        {t.leaguePendingParticipantsProgress
-                          ? t.leaguePendingParticipantsProgress
-                              .replace('{current}', String(participantsNow))
-                              .replace('{target}', String(participantTarget))
-                          : `${participantsNow}/${participantTarget} players joined`}
-                      </span>
-                    )}
-                    {selectedLeague?.startCondition !== "participants" && (selectedLeague?.startAt || selectedLeague?.signupDeadline) && (
-                      <span className="mt-1 block text-xs">
-                        {t.leaguePendingDateInfo
-                          ? t.leaguePendingDateInfo.replace('{date}', new Date((selectedLeague.startAt ?? selectedLeague.signupDeadline) as string).toLocaleString())
-                          : `Launch date: ${new Date((selectedLeague.startAt ?? selectedLeague.signupDeadline) as string).toLocaleString()}`}
-                      </span>
-                    )}
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {loadingMatches ? (
-                <div className="flex min-h-[160px] items-center justify-center text-muted-foreground">
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  {t.loading || "Loading"}
-                </div>
-              ) : matches.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-muted-foreground">
-                  {t.noMatches || "No matches available for this league yet."}
-                </div>
-              ) : (
-                matches.map((match) => {
-                  const locked = leagueLocked || isMatchLocked(match);
-                  const prediction = predictions[match.id];
-                  return (
-                    <div
-                      key={match.id}
-                      className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-md"
-                    >
-                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <p className="text-sm uppercase text-muted-foreground">
-                            {selectedLeague?.championship || t.match || "Match"}
-                          </p>
-                          <h3 className="text-xl font-semibold text-slate-900">
-                            {match.homeTeam} vs {match.awayTeam}
-                          </h3>
-                        </div>
-                        <div className="flex flex-col items-end gap-2 text-right">
-                          <Badge className="gap-1 bg-emerald-500/10 text-emerald-600">
-                            <Clock className="h-3 w-3" />
-                            {timeUntilMatch(match.matchDate)}
-                          </Badge>
-                          <p className="text-sm text-muted-foreground">
-                            {formatMatchDate(match.matchDate)}
-                          </p>
-                          {locked && (
-                            <Badge className="bg-rose-100 text-rose-700">
-                              {t.predictionClosed || "Predictions closed"}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-
-                      <Separator className="my-4" />
-
-                      <div className="grid gap-4 md:grid-cols-4">
-                        <div className="space-y-2">
-                          <Label htmlFor={`home-${match.id}`}>{t.homeScore || "Home score"}</Label>
-                          <Input
-                            id={`home-${match.id}`}
-                            value={prediction?.homeScore ?? ""}
-                            onChange={(event) =>
-                              handlePredictionChange(match.id, "homeScore", event.target.value)
-                            }
-                            placeholder="2"
-                            inputMode="numeric"
-                            disabled={locked}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor={`away-${match.id}`}>{t.awayScore || "Away score"}</Label>
-                          <Input
-                            id={`away-${match.id}`}
-                            value={prediction?.awayScore ?? ""}
-                            onChange={(event) =>
-                              handlePredictionChange(match.id, "awayScore", event.target.value)
-                            }
-                            placeholder="1"
-                            inputMode="numeric"
-                            disabled={locked}
-                          />
-                        </div>
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3">
-                            <div>
-                              <p className="text-xs text-muted-foreground">
-                                {t.confidence || "Confidence"}
-                              </p>
-                              <p className="text-sm font-medium text-slate-900">
-                                {t.confidenceHint || "Boost your yield"}
-                              </p>
-                            </div>
-                            <Switch
-                              checked={prediction?.confident ?? false}
-                              onCheckedChange={(value) => handlePredictionChange(match.id, "confident", value)}
-                              disabled={locked}
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs text-muted-foreground">
-                            {t.actions || "Actions"}
-                          </Label>
-                          <Button
-                            className="w-full gap-2"
-                            onClick={() => void submitPrediction(match)}
-                            disabled={locked || !canSubmit(match) || savingMatchId === match.id}
-                          >
-                            {savingMatchId === match.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Target className="h-4 w-4" />
-                            )}
-                            {t.submitPrediction || "Submit prediction"}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+          <CardContent className="space-y-6">
+            <TabsContent value="upcoming" className="space-y-6">
+              {renderMatches(upcomingSections, "upcoming")}
             </TabsContent>
 
-            <TabsContent value="history">
-              <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-sm text-muted-foreground">
-                {t.historyComingSoon || "Prediction history will appear once matches are settled."}
-              </div>
+            <TabsContent value="history" className="space-y-6">
+              {renderMatches(historySections, "history")}
             </TabsContent>
 
             <TabsContent value="rules" className="space-y-4">
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-6">
                 <div className="flex items-start gap-3">
-                  <AlertTriangle className="h-5 w-5 text-amber-600" />
+                  <AlertTriangle className="mt-0.5 size-5 text-amber-600" />
                   <div>
                     <h3 className="text-base font-semibold text-slate-900">
-                      {t.scoringOverview || "Scoring overview"}
+                      {t.scoringOverview || "Barème de points"}
                     </h3>
                     <p className="mt-2 text-sm text-muted-foreground">
-                      {t.scoringOverviewDesc || "Exact rules will be announced when the scoring engine goes live."}
+                      {t.scoringOverviewDesc || "3 points pour le bon vainqueur ou nul, +3 points supplémentaires pour le score exact."}
                     </p>
                   </div>
                 </div>
@@ -572,81 +1193,6 @@ export function MatchBetting({
           </CardContent>
         </Tabs>
       </Card>
-
-      <Separator />
-
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>{t.benoloStaking || "Benolo staking"}</CardTitle>
-            <CardDescription>
-              {t.benoloStakingDesc || "Automate your USDC staking per prediction."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between rounded-lg border border-slate-200 p-4">
-              <div>
-                <p className="text-sm font-medium text-slate-900">{t.autoStake || "Auto stake"}</p>
-                <p className="text-xs text-muted-foreground">
-                  {t.autoStakeDesc || "Allocate a small portion of your balance when confidence is enabled."}
-                </p>
-              </div>
-              <Switch checked={autoStake} onCheckedChange={setAutoStake} />
-            </div>
-            <div className="rounded-lg bg-slate-50 p-4 text-sm text-muted-foreground">
-              {t.stakingInfo || "Benolo keeps your principal safe. Only yields are redistributed to top predictors."}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t.leaderboardSnapshot || "Leaderboard snapshot"}</CardTitle>
-            <CardDescription>
-              {t.leaderboardSnapshotDesc || "Top predictors for this league."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {leaderboardError && (
-              <Alert variant="destructive">
-                <AlertDescription>{leaderboardError}</AlertDescription>
-              </Alert>
-            )}
-            {loadingLeaderboard ? (
-              <div className="flex items-center justify-center text-muted-foreground">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t.loading || "Loading"}
-              </div>
-            ) : leaderboard.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t.leaderboardSnapshotInfo || "Be the first to submit a prediction."}
-              </p>
-            ) : (
-              leaderboard.map((entry, index) => (
-                <div
-                  key={`${entry.user_id}-${index}`}
-                  className="flex items-center justify-between rounded-lg border border-slate-200 p-3 text-sm"
-                >
-                  <div className="flex items-center gap-3">
-                    <Badge className="h-8 w-8 justify-center rounded-full">
-                      {index + 1}
-                    </Badge>
-                    <div>
-                      <p className="font-semibold text-slate-900">
-                        {entry.displayName ?? entry.user_id}
-                      </p>
-                      <p className="text-xs text-muted-foreground">{entry.user_id}</p>
-                    </div>
-                  </div>
-                  <div className="text-right font-semibold text-emerald-600">
-                    {Math.round(Number(entry.total_points ?? 0))} pts
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }

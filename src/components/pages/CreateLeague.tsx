@@ -140,6 +140,7 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
   const { address } = useAccount();
   const chainId = useChainId();
   const { createLeague } = useLeagueFactoryCreate();
+  const onchainConfigAvailable = Boolean(leagueFactoryAddress && usdcTokenAddress);
 
   useEffect(() => {
     const supabase = supabaseBrowserClient;
@@ -247,6 +248,17 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
   [formData.customDistribution]);
 
   const handleFieldChange = <Key extends keyof LeagueFormState>(field: Key, value: LeagueFormState[Key]) => {
+    if (field === "leagueType" && value === "paid" && !onchainConfigAvailable) {
+      setSubmitError(
+        t.onchainUnavailable ||
+          "Les ligues payantes nécessitent une configuration on-chain indisponible sur cet environnement. Choisis l'option gratuite ou configure les contrats.",
+      );
+      setCurrentStep("type");
+      return;
+    }
+
+    setSubmitError(null);
+
     setFormData((prev) => ({
       ...prev,
       [field]: value,
@@ -401,29 +413,26 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
       }
 
       if (formData.leagueType === "paid") {
-        if (!leagueFactoryAddress || !usdcTokenAddress) {
-          setSubmitError("Configuration manquante pour les contrats Benolo. Contacte l'équipe.");
-          return;
-        }
-
         if (!selectedStrategy) {
           setSubmitError("Sélectionne une stratégie d'investissement pour ta ligue.");
           setCurrentStep("financials");
           return;
         }
 
-        if (!address) {
-          setSubmitError("Connecte ton wallet pour créer une ligue payante.");
-          return;
-        }
+        if (onchainConfigAvailable) {
+          if (!address) {
+            setSubmitError("Connecte ton wallet pour créer une ligue payante.");
+            return;
+          }
 
-        if (chainId !== base.id) {
-          setSubmitError("Passe ton wallet sur Base (chainId 8453) pour continuer.");
-          return;
+          if (chainId !== base.id) {
+            setSubmitError("Passe ton wallet sur Base (chainId 8453) pour continuer.");
+            return;
+          }
         }
       }
 
-      if (formData.leagueType === "paid" && hasWallet === false) {
+      if (formData.leagueType === "paid" && onchainConfigAvailable && hasWallet === false) {
         setSubmitError("Un wallet EVM doit être lié à votre compte pour créer une ligue payante.");
         setCurrentStep("type");
         return;
@@ -549,8 +558,11 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
       }
 
       let leagueRecord = data;
+      let syncWarning: string | null = null;
 
-      if (formData.leagueType === "paid" && leagueFactoryAddress && usdcTokenAddress && selectedStrategy) {
+      const onchainEnabled = formData.leagueType === "paid" && onchainConfigAvailable && Boolean(selectedStrategy);
+
+      if (onchainEnabled && selectedStrategy) {
         const exitPenaltyBpsValue = formData.allowEarlyExit
           ? Math.round(Number(formData.earlyExitPenalty) * 100)
           : 0;
@@ -584,7 +596,39 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
         }
       }
 
+      if (supabase && formData.championship) {
+        try {
+          const { error: syncError } = await supabase.functions.invoke("sync-matches", {
+            body: { leagueId: leagueRecord.id },
+          });
+
+          if (syncError) {
+            syncWarning = syncError.message ?? "La synchronisation des matchs a échoué.";
+            console.error("Sync matches failed", syncError);
+          }
+        } catch (syncUnexpected) {
+          syncWarning = syncUnexpected instanceof Error ? syncUnexpected.message : String(syncUnexpected);
+          console.error("Sync matches threw", syncUnexpected);
+        }
+      }
+
       onLeagueCreated(leagueRecord);
+
+      if (syncWarning) {
+        window.alert(
+          `${t.syncWarningIntro || "Ligue créée"}. ${
+            t.syncWarningDetails ||
+            "Cependant, la synchronisation automatique des matchs a rencontré un problème. Tu peux relancer la synchronisation depuis l'espace admin."}
+\n\n(${syncWarning})`,
+        );
+      }
+
+      if (formData.leagueType === "paid" && !onchainEnabled) {
+        window.alert(
+          t.onchainDisabledNotice ||
+            "La création on-chain n'est pas configurée sur cet environnement. La ligue est créée côté Benolo mais aucun contrat n'a été déployé.",
+        );
+      }
     } catch (error: any) {
       setSubmitError(error.message || "Erreur lors de la création de la ligue");
     } finally {
@@ -926,10 +970,13 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
         <button
           type="button"
           onClick={() => handleFieldChange("leagueType", "paid")}
+          disabled={!onchainConfigAvailable}
           className={`flex h-full flex-col gap-4 rounded-2xl border-2 p-6 text-left transition-all ${
             formData.leagueType === "paid"
               ? "border-slate-900 bg-slate-50 shadow-lg"
-              : "border-slate-200 hover:border-slate-300"
+              : onchainConfigAvailable
+                ? "border-slate-200 hover:border-slate-300"
+                : "cursor-not-allowed border-slate-200 bg-slate-50/60"
           }`}
         >
           <div className="flex items-center gap-3 text-slate-900">
@@ -942,6 +989,18 @@ export function CreateLeague({ onBack, onLeagueCreated, translations: t, languag
           <Badge className="bg-emerald-500/10 text-emerald-600" variant="secondary">
             {t.rewardsIncluded || "Récompenses Benolo"}
           </Badge>
+          {!onchainConfigAvailable && (
+            <div className="rounded-xl border border-slate-200 bg-slate-100 p-3 text-xs text-slate-600">
+              <div className="flex items-center gap-2 font-medium">
+                <Lock className="h-4 w-4" />
+                {t.onchainUnavailableShort || "Activation on-chain en attente"}
+              </div>
+              <p className="mt-2">
+                {t.onchainUnavailable ||
+                  "Configure NEXT_PUBLIC_LEAGUE_FACTORY_ADDRESS et NEXT_PUBLIC_USDC_ADDRESS pour activer les ligues payantes."}
+              </p>
+            </div>
+          )}
           {hasWallet === false && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
               <div className="flex items-center gap-2 font-medium">

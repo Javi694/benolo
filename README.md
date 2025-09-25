@@ -101,8 +101,36 @@ Les politiques RLS limitent l'accès à l'utilisateur courant; le rôle `service
 
 ## Sports data ingestion
 
-- Edge function `sync-matches` keeps `league_matches` in sync with the external provider and automatically closes leagues via the new completion triggers.
-- Required env vars for deployment: `SUPABASE_SERVICE_ROLE_KEY`, `SPORTS_DATA_API_KEY`, optional `SPORTS_DATA_API_URL`, `SPORTS_DATA_LOOKBACK_DAYS`, `SPORTS_DATA_LOOKAHEAD_DAYS`, `SYNC_MATCHES_SECRET`.
-- Map your championships to provider leagues in `supabase/functions/_shared/provider-config.ts` (API-Football IDs prefilled for major soccer leagues; NBA/NFL default to mock data).
-- Local run example: `SYNC_MATCHES_SECRET=devsecret npx supabase functions serve sync-matches` then `curl -X POST -H "Authorization: Bearer devsecret" -d '{"leagueId":"<uuid>"}' http://localhost:54321/functions/v1/sync-matches`.
-- Deploy once ready: `npx supabase functions deploy sync-matches --project-ref <project>` and attach to Supabase Cron for hourly execution.
+- The edge function `sync-matches` now fetches Ligue 1 (`FL1`) and Champions League (`CL`) fixtures from [football-data.org](https://www.football-data.org/) while keeping the existing API-Football mapping for the other European leagues. The normalization lives in `supabase/functions/_shared`.
+- Configure secrets before deploying:
+  - `FOOTBALL_DATA_API_KEY` (**required**) and optional `FOOTBALL_DATA_BASE_URL`.
+  - Existing `SPORTS_DATA_API_KEY`, `SPORTS_DATA_API_URL`, `SPORTS_DATA_LOOKBACK_DAYS`, `SPORTS_DATA_LOOKAHEAD_DAYS` stay supported for leagues that still rely on API-Football.
+  - `SYNC_MATCHES_SECRET` remains optional; if set, pass it via the `x-sync-secret` header when invoking the edge function.
+- League creation automatically triggers `sync-matches` so the freshly created league receives its fixtures straight away. You can manually re-run the ingester with:
+
+  ```bash
+  ts-node scripts/import-fixtures.ts <league-id>
+  ```
+
+- The migration `20250924_schedule_match_sync.sql` installs a helper (`public.invoke_sync_matches(uuid[] default null)`) and a pg_cron entry named `sync_matches_daily` that calls the edge function every day at **04:00 UTC**. Override the target host/credentials via database settings when you deploy:
+
+  ```sql
+  alter database postgres set app.settings.functions_base_url = 'https://<project>.functions.supabase.co';
+  alter database postgres set app.settings.functions_service_jwt = '<SUPABASE_SERVICE_ROLE_KEY>';
+  -- optionally, use the anon JWT instead
+  -- alter database postgres set app.settings.functions_anon_jwt = '<NEXT_PUBLIC_SUPABASE_ANON_KEY>';
+  ```
+
+  Local development falls back to `http://127.0.0.1:54321/functions/v1` and the CLI-generated keys, so no extra configuration is needed.
+
+- When running locally you can still serve the edge function and test it directly:
+
+  ```bash
+  npx supabase functions serve sync-matches
+  curl -X POST \
+    -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+    -d '{"leagueId":"<uuid>"}' \
+    http://127.0.0.1:54321/functions/v1/sync-matches
+  ```
+
+- Championship → provider mappings stay in `supabase/functions/_shared/provider-config.ts`. Ligue 1 and Champions League now point to `football-data`, NBA/NFL remain on mock data.

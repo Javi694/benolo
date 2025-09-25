@@ -26,6 +26,7 @@ interface LeagueRow {
 interface LeagueMatchRow extends ExistingMatchSnapshot {
   id: string;
   external_ref: string | null;
+  metadata: Record<string, unknown> | null;
 }
 
 interface SyncSummary {
@@ -184,6 +185,12 @@ const fetchApiFootballFixtures = async (
     if (fixture?.venue?.name) {
       metadata.venue = fixture.venue.name;
     }
+    if (teams?.home?.logo) {
+      metadata.homeCrest = teams.home.logo;
+    }
+    if (teams?.away?.logo) {
+      metadata.awayCrest = teams.away.logo;
+    }
 
     return {
       id: String(fixture?.id ?? entry?.id ?? crypto.randomUUID()),
@@ -191,6 +198,163 @@ const fetchApiFootballFixtures = async (
       awayTeam,
       startTime: fixture?.date ?? new Date().toISOString(),
       status: fixture?.status?.short ?? fixture?.status?.long ?? null,
+      homeScore,
+      awayScore,
+      metadata,
+    } satisfies ProviderFixture;
+  });
+};
+
+interface FootballDataTeam {
+  id?: number;
+  name?: string;
+  shortName?: string;
+  tla?: string;
+}
+
+interface FootballDataScoreValue {
+  home: number | null;
+  away: number | null;
+}
+
+interface FootballDataScore {
+  fullTime?: FootballDataScoreValue | null;
+  halfTime?: FootballDataScoreValue | null;
+  extraTime?: FootballDataScoreValue | null;
+  penalties?: FootballDataScoreValue | null;
+}
+
+interface FootballDataMatch {
+  id: number;
+  utcDate: string;
+  status: string;
+  matchday?: number | null;
+  stage?: string | null;
+  group?: string | null;
+  lastUpdated?: string | null;
+  homeTeam?: FootballDataTeam | null;
+  awayTeam?: FootballDataTeam | null;
+  score?: FootballDataScore | null;
+  odds?: { msg?: string | null } | null;
+  referees?: Array<{
+    id?: number;
+    name?: string | null;
+    type?: string | null;
+    nationality?: string | null;
+  }> | null;
+  area?: { id?: number; name?: string | null; code?: string | null } | null;
+  competition?: { id?: number; name?: string | null; code?: string | null } | null;
+  season?: {
+    id?: number;
+    startDate?: string | null;
+    endDate?: string | null;
+    currentMatchday?: number | null;
+  } | null;
+}
+
+interface FootballDataResponse {
+  filters?: Record<string, unknown> | null;
+  resultSet?: Record<string, unknown> | null;
+  competition?: Record<string, unknown> | null;
+  matches?: FootballDataMatch[] | null;
+}
+
+const fetchFootballDataFixtures = async (
+  config: ChampionshipProviderConfig,
+  _now: Date,
+  options: SyncOptions = {},
+): Promise<ProviderFixture[]> => {
+  const seasonOverride = options?.seasonOverride;
+  const season = seasonOverride ?? config.season;
+
+  if (!config.competitionCode) {
+    throw new Error("football-data config requires competitionCode");
+  }
+
+  const apiKey = (config.apiToken && config.apiToken.trim() !== "")
+    ? config.apiToken.trim()
+    : ensureEnv("FOOTBALL_DATA_API_KEY", "EDGE_FOOTBALL_DATA_API_KEY");
+  const baseUrl = Deno.env.get("FOOTBALL_DATA_BASE_URL") ?? "https://api.football-data.org/v4";
+
+  const params = new URLSearchParams();
+  if (season) {
+    params.set("season", String(season));
+  }
+
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/competitions/${config.competitionCode}/matches${
+    params.size > 0 ? `?${params.toString()}` : ""
+  }`;
+
+  const response = await fetch(endpoint, {
+    headers: {
+      accept: "application/json",
+      "X-Auth-Token": apiKey,
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`football-data request failed (${response.status}): ${body}`);
+  }
+
+  const payload = (await response.json()) as FootballDataResponse;
+  const matches = Array.isArray(payload?.matches) ? payload.matches : [];
+
+  const filters = (payload?.filters ?? {}) as Record<string, unknown>;
+  const resultSet = (payload?.resultSet ?? {}) as Record<string, unknown>;
+
+  return matches.map((match) => {
+    const score = match.score ?? {};
+    const competition = match.competition ?? payload?.competition ?? {};
+    const metadata: Record<string, unknown> = {};
+
+    if (match.matchday != null) metadata.matchday = match.matchday;
+    if (match.stage) metadata.stage = match.stage;
+    if (match.group) metadata.group = match.group;
+    if (match.lastUpdated) metadata.lastUpdated = match.lastUpdated;
+    if (competition?.code) metadata.competitionCode = competition.code;
+    if (competition?.name) metadata.competitionName = competition.name;
+    if (match.season?.startDate) metadata.seasonStart = match.season.startDate;
+    if (match.season?.endDate) metadata.seasonEnd = match.season.endDate;
+    if (match.season?.currentMatchday != null) metadata.currentMatchday = match.season.currentMatchday;
+    if (filters?.season) metadata.filterSeason = filters.season;
+    if (filters?.matchday) metadata.filterMatchday = filters.matchday;
+    if (resultSet?.first) metadata.rangeStart = resultSet.first;
+    if (resultSet?.last) metadata.rangeEnd = resultSet.last;
+    if (resultSet?.count != null) metadata.rangeCount = resultSet.count;
+    if (match.area?.name) metadata.area = match.area.name;
+    if (match.odds?.msg) metadata.oddsMessage = match.odds.msg;
+    if (Array.isArray(match.referees) && match.referees.length > 0) {
+      metadata.referees = match.referees.map((ref) => ({
+        id: ref?.id ?? null,
+        name: ref?.name ?? null,
+        type: ref?.type ?? null,
+        nationality: ref?.nationality ?? null,
+      }));
+    }
+    if (match.homeTeam?.crest) {
+      metadata.homeCrest = match.homeTeam.crest;
+    }
+    if (match.awayTeam?.crest) {
+      metadata.awayCrest = match.awayTeam.crest;
+    }
+
+    const homeScore = pickScoreValue(
+      score?.fullTime?.home ?? score?.extraTime?.home ?? score?.penalties?.home ?? null,
+    );
+    const awayScore = pickScoreValue(
+      score?.fullTime?.away ?? score?.extraTime?.away ?? score?.penalties?.away ?? null,
+    );
+
+    const homeTeamName = match.homeTeam?.name ?? match.homeTeam?.shortName ?? "Home";
+    const awayTeamName = match.awayTeam?.name ?? match.awayTeam?.shortName ?? "Away";
+
+    return {
+      id: String(match.id ?? crypto.randomUUID()),
+      homeTeam: homeTeamName,
+      awayTeam: awayTeamName,
+      startTime: match.utcDate ?? new Date().toISOString(),
+      status: match.status ?? null,
       homeScore,
       awayScore,
       metadata,
@@ -209,6 +373,9 @@ const fetchFixturesForConfig = async (
   }
   if (config.provider === "api-football") {
     return fetchApiFootballFixtures(config, now, options);
+  }
+  if (config.provider === "football-data") {
+    return fetchFootballDataFixtures(config, now, options);
   }
   throw new Error(`Unsupported provider: ${config.provider}`);
 };
@@ -239,7 +406,7 @@ const syncLeagueMatches = async (
 
   const { data: matchRows, error: matchesError } = await supabase
     .from("league_matches")
-    .select("id, external_ref, start_at, status, home_score, away_score")
+    .select("id, external_ref, start_at, status, home_score, away_score, metadata")
     .eq("league_id", league.id);
 
   if (matchesError) {
@@ -256,6 +423,7 @@ const syncLeagueMatches = async (
         status: row.status,
         home_score: row.home_score,
         away_score: row.away_score,
+        metadata: row.metadata ?? null,
       });
     }
   });

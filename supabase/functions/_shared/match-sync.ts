@@ -28,6 +28,7 @@ export interface ExistingMatchSnapshot {
   status: string | null;
   home_score: number | null;
   away_score: number | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 const COMPLETED_MARKERS = new Set([
@@ -55,16 +56,19 @@ const LIVE_MARKERS = new Set([
   "et",
   "p",
   "pause",
+  "paused",
   "halftime",
   "second_half",
   "first_half",
   "extra_time",
+  "suspended",
 ]);
 
 const UPCOMING_MARKERS = new Set([
   "ns",
   "not_started",
   "scheduled",
+  "timed",
   "tbd",
   "to_be_defined",
   "postponed",
@@ -151,6 +155,15 @@ export const normalizeFixture = (
   };
 };
 
+const extractLogo = (metadata: Record<string, unknown> | null | undefined, key: string): string => {
+  if (!metadata || typeof metadata !== "object") {
+    return "";
+  }
+
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : "";
+};
+
 export const hasMatchChanged = (
   existing: ExistingMatchSnapshot | null | undefined,
   normalized: NormalizedFixture,
@@ -160,12 +173,18 @@ export const hasMatchChanged = (
   }
 
   const existingStatus = existing.status ?? "upcoming";
+  const existingHomeLogo = extractLogo(existing.metadata ?? null, "homeCrest");
+  const existingAwayLogo = extractLogo(existing.metadata ?? null, "awayCrest");
+  const normalizedHomeLogo = extractLogo(normalized.providerMeta ?? null, "homeCrest");
+  const normalizedAwayLogo = extractLogo(normalized.providerMeta ?? null, "awayCrest");
 
   return (
     normalizeIsoString(existing.start_at) !== normalized.startAt ||
     existingStatus !== normalized.status ||
     (existing.home_score ?? null) !== (normalized.homeScore ?? null) ||
-    (existing.away_score ?? null) !== (normalized.awayScore ?? null)
+    (existing.away_score ?? null) !== (normalized.awayScore ?? null) ||
+    existingHomeLogo !== normalizedHomeLogo ||
+    existingAwayLogo !== normalizedAwayLogo
   );
 };
 

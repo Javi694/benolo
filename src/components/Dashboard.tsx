@@ -285,6 +285,7 @@ export function Dashboard({
         name: league.name,
         sport: inferSportFromChampionship(league.championship),
         championship: league.championship ?? "custom",
+        createdAt: league.created_at,
         participants,
         maxParticipants: league.max_members ?? null,
         entryFee,
