@@ -838,12 +838,6 @@ export default function Page() {
                   Benolo
                 </span>
               </div>
-              <div>
-                <p className="text-xs uppercase tracking-widest text-emerald-500">
-                  {t.protocol || "Powered by Benolo"}
-                </p>
-                <h1 className="text-xl font-semibold">{t.appName || "PronoPool"}</h1>
-              </div>
             </div>
 
             <nav className="hidden items-center gap-2 lg:flex">
@@ -1054,7 +1048,7 @@ export default function Page() {
           <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2 text-emerald-600">
               <Sparkles className="h-4 w-4" />
-              Powered by Benolo Protocol
+              Benolo Protocol
             </div>
             <div className="flex flex-wrap items-center gap-4">
               <span>© {new Date().getFullYear()} Benolo. All rights reserved.</span>

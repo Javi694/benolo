@@ -4,7 +4,7 @@ export const translations = {
   en: {
     // App basics - Benolo integration
     appName: 'PronoPool',
-    protocol: 'Powered by Benolo Protocol',
+    protocol: 'Benolo Protocol',
     benolo: 'Benolo',
     tagline: 'Bet with friends without losing money',
     safetyMessage: 'Your money is 100% protected',
@@ -71,7 +71,7 @@ export const translations = {
     
     // Join League content
     joinLeagueTitle: 'Join a League',
-    joinLeagueSubtitle: 'Find and join leagues powered by Benolo Protocol',
+    joinLeagueSubtitle: 'Find and join Benolo leagues',
     
     browseLeagues: 'Browse Open Leagues',
     enterLeagueCode: 'Enter League Code',
@@ -240,7 +240,7 @@ export const translations = {
   fr: {
     // App basics
     appName: 'PronoPool',
-    protocol: 'Propulsé par le Protocole Benolo',
+    protocol: 'Protocole Benolo',
     benolo: 'Benolo',
     tagline: 'Pariez entre amis sans perdre d\'argent',
     safetyMessage: 'Votre argent est protégé à 100%',
@@ -264,7 +264,7 @@ export const translations = {
   es: {
     // App basics
     appName: 'PronoPool',
-    protocol: 'Impulsado por el Protocolo Benolo',
+    protocol: 'Protocolo Benolo',
     benolo: 'Benolo',
     tagline: 'Apuesta con amigos sin perder dinero',
     safetyMessage: 'Tu dinero está 100% protegido',
@@ -278,7 +278,7 @@ export const translations = {
   pt: {
     // App basics
     appName: 'PronoPool',
-    protocol: 'Alimentado pelo Protocolo Benolo',
+    protocol: 'Protocolo Benolo',
     benolo: 'Benolo',
     tagline: 'Aposte com amigos sem perder dinheiro',
     safetyMessage: 'Seu dinheiro está 100% protegido',
@@ -292,7 +292,7 @@ export const translations = {
   zh: {
     // App basics
     appName: 'PronoPool',
-    protocol: '由 Benolo 协议驱动',
+    protocol: 'Benolo 协议',
     benolo: 'Benolo',
     tagline: '与朋友投注而不会亏钱',
     safetyMessage: '您的资金100%受保护',

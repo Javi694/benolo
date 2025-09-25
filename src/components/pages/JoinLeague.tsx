@@ -235,7 +235,7 @@ export function JoinLeague({ translations: t, onBack, onViewLeague, language = '
           {t.backToDashboard || 'Back to dashboard'}
         </Button>
         <Badge className="bg-emerald-500/10 text-emerald-600">
-          {t.safeLeagueBanner || 'Powered by Benolo protocol'}
+          {t.safeLeagueBanner || 'Benolo Protocol'}
         </Badge>
       </div>
       <div className="text-center">
@@ -248,7 +248,7 @@ export function JoinLeague({ translations: t, onBack, onViewLeague, language = '
           {t.joinLeagueTitle || 'Join a League'}
         </h1>
         <p className="text-2xl text-slate-600">
-          {t.joinLeagueSubtitle || 'Find and join leagues powered by Benolo Protocol'}
+          {t.joinLeagueSubtitle || 'Find and join Benolo leagues'}
         </p>
       </div>
 

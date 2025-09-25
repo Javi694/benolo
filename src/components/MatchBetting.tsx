@@ -127,6 +127,9 @@ const MATCH_LOCK_STATUSES = new Set([
   "postponed",
 ]);
 
+// Toggle to quickly revert to the previous match layout if needed.
+const USE_TRENDY_LAYOUT = true;
+
 const createPredictionKey = (matchId: string, leagueId: string) => `${matchId}:${leagueId}`;
 
 const parseScoreInput = (value: string) => value.replace(/[^0-9]/g, "").slice(0, 3);
@@ -793,7 +796,13 @@ export function MatchBetting({
     const message = saveErrorMessage[key];
     if (status === "saving") {
       return (
-        <Badge variant="secondary" className="gap-1 bg-amber-100 text-amber-700">
+        <Badge
+          variant="secondary"
+          className={`gap-1 ${USE_TRENDY_LAYOUT
+            ? "border border-amber-300/40 bg-amber-500/10 text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.35)] backdrop-blur"
+            : "bg-amber-100 text-amber-700"
+          }`}
+        >
           <Loader2 className="size-3 animate-spin" />
           {t.savingPrediction || "Enregistrement..."}
         </Badge>
@@ -801,7 +810,12 @@ export function MatchBetting({
     }
     if (status === "saved") {
       return (
-        <Badge className="gap-1 bg-emerald-100 text-emerald-700">
+        <Badge
+          className={`gap-1 ${USE_TRENDY_LAYOUT
+            ? "border border-emerald-300/40 bg-emerald-500/10 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.25)] backdrop-blur"
+            : "bg-emerald-100 text-emerald-700"
+          }`}
+        >
           <Check className="size-3" />
           {t.predictionSaved || "Sauvegardé"}
         </Badge>
@@ -809,7 +823,13 @@ export function MatchBetting({
     }
     if (status === "error") {
       return (
-        <Badge variant="destructive" className="gap-1">
+        <Badge
+          variant="destructive"
+          className={`gap-1 ${USE_TRENDY_LAYOUT
+            ? "border border-rose-400/40 bg-rose-500/15 text-rose-100 shadow-[0_0_0_1px_rgba(244,63,94,0.35)] backdrop-blur"
+            : ""
+          }`}
+        >
           <XCircle className="size-3" />
           {message ?? t.predictionSaveFailed || "Erreur"}
         </Badge>
@@ -878,74 +898,278 @@ export function MatchBetting({
     );
   };
 
-  const renderMatchCard = (match: AggregatedMatch, tab: "upcoming" | "history") => {
-    return (
-      <Card key={match.unifiedId} className="border-slate-200 shadow-sm">
-        <CardHeader className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-              <CalendarDays className="size-3.5" />
-              {match.competitionName ?? t.defaultCompetitionLabel ?? "Compétition"}
-              <ChevronRight className="size-3" />
-              {match.matchday != null
-                ? (t.matchdayTitle ? t.matchdayTitle.replace("{number}", String(match.matchday)) : `Journée ${match.matchday}`)
-                : (t.matchdayUnknown || "Prochaines rencontres")}
+  const renderClassicMatchCard = (match: AggregatedMatch, tab: "upcoming" | "history") => (
+    <Card key={match.unifiedId} className="border-slate-200 shadow-sm">
+      <CardHeader className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+            <CalendarDays className="size-3.5" />
+            {match.competitionName ?? t.defaultCompetitionLabel ?? "Compétition"}
+            <ChevronRight className="size-3" />
+            {match.matchday != null
+              ? (t.matchdayTitle ? t.matchdayTitle.replace("{number}", String(match.matchday)) : `Journée ${match.matchday}`)
+              : (t.matchdayUnknown || "Prochaines rencontres")}
+          </div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Clock className="size-4" />
+            {formatMatchDate(match.startAt)}
+          </div>
+        </div>
+
+        <div className="grid gap-6 md:grid-cols-[1fr_auto_1fr] md:items-center">
+          <div className="flex flex-col items-center gap-3 text-center">
+            {match.homeCrest ? (
+              <Image
+                src={match.homeCrest}
+                alt={match.homeTeam}
+                width={56}
+                height={56}
+                className="size-14 rounded-full border border-slate-200 bg-white object-contain p-1"
+              />
+            ) : (
+              <div className="size-14 rounded-full border border-dashed border-slate-200 bg-slate-50" />
+            )}
+            <span className="text-sm font-semibold text-slate-700 max-w-[140px]">
+              {match.homeTeam}
+            </span>
+          </div>
+          <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
+            <span className="text-xs uppercase tracking-widest text-muted-foreground">vs</span>
+            {tab === "upcoming" ? (
+              <Badge className="gap-1 bg-emerald-100 text-emerald-700">
+                <Users className="size-3" />
+                {timeUntilMatch(match.startAt)}
+              </Badge>
+            ) : (
+              <Badge className="gap-1 bg-slate-200 text-slate-600">
+                {t.matchFinished || "Terminé"}
+              </Badge>
+            )}
+          </div>
+          <div className="flex flex-col items-center gap-3 text-center">
+            {match.awayCrest ? (
+              <Image
+                src={match.awayCrest}
+                alt={match.awayTeam}
+                width={56}
+                height={56}
+                className="size-14 rounded-full border border-slate-200 bg-white object-contain p-1"
+              />
+            ) : (
+              <div className="size-14 rounded-full border border-dashed border-slate-200 bg-slate-50" />
+            )}
+            <span className="text-sm font-semibold text-slate-700 max-w-[140px]">
+              {match.awayTeam}
+            </span>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {match.leagues.map((entry) => {
+          const key = createPredictionKey(entry.matchId, entry.leagueId);
+          const prediction = predictionStates[key] ?? { homeScore: "", awayScore: "", confident: false };
+          const meta = predictionMeta[key];
+          const statusBadge = renderPredictionStatus(key);
+
+          return (
+            <div
+              key={key}
+              className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {entry.leagueName}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {entry.locked
+                      ? (t.predictionLocked || "Pronostic verrouillé")
+                      : (t.predictionOpen || "Pronostic ouvert")}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {statusBadge}
+                  {tab === "upcoming" && match.leagues.length > 1 && !entry.locked ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-2"
+                      onClick={() => copyPredictionAcrossLeagues(match, entry.leagueId)}
+                    >
+                      <Copy className="size-3.5" />
+                      {t.copyPrediction || "Répliquer le résultat sur les autres ligues"}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+
+              <Separator className="my-4" />
+
+              {tab === "upcoming" ? (
+                <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-end">
+                  <div className="flex flex-col items-center gap-2 text-center md:items-start md:text-left">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {match.homeTeam}
+                    </span>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      min={0}
+                      max={99}
+                      value={prediction.homeScore}
+                      onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "home", event.target.value)}
+                      onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
+                      disabled={entry.locked}
+                      className="w-full max-w-[120px] text-center text-lg"
+                    />
+                  </div>
+                  <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
+                    <span>{t.predictionSeparator || "Score"}</span>
+                    <Separator orientation="vertical" className="h-10" />
+                  </div>
+                  <div className="flex flex-col items-center gap-2 text-center md:items-end md:text-right">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {match.awayTeam}
+                    </span>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      min={0}
+                      max={99}
+                      value={prediction.awayScore}
+                      onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "away", event.target.value)}
+                      onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
+                      disabled={entry.locked}
+                      className="w-full max-w-[120px] text-center text-lg"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
+                  <div className="rounded-lg bg-slate-50 p-4 text-sm md:text-left">
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">
+                      {t.yourPrediction || "Ton pronostic"}
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-slate-800">
+                      {prediction.homeScore !== "" && prediction.awayScore !== ""
+                        ? `${prediction.homeScore} - ${prediction.awayScore}`
+                        : t.predictionMissing || "Non renseigné"}
+                    </p>
+                    {meta?.points != null ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {t.pointsEarned
+                          ? t.pointsEarned.replace("{points}", String(meta.points))
+                          : `Points gagnés : ${meta.points}`}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center justify-center">
+                    <Separator orientation="vertical" className="h-16" />
+                  </div>
+                  <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm md:text-right">
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">
+                      {t.finalScore || "Score final"}
+                    </p>
+                    <p className="mt-1 text-lg font-semibold text-slate-800">
+                      {entry.matchHomeScore != null && entry.matchAwayScore != null
+                        ? `${entry.matchHomeScore} - ${entry.matchAwayScore}`
+                        : t.finalScorePending || "En attente"}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Clock className="size-4" />
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+
+  const renderMatchCard = (match: AggregatedMatch, tab: "upcoming" | "history") => {
+    if (!USE_TRENDY_LAYOUT) {
+      return renderClassicMatchCard(match, tab);
+    }
+
+    const competitionLabel = match.competitionName ?? t.defaultCompetitionLabel ?? "Compétition";
+    const matchdayLabel = match.matchday != null
+      ? (t.matchdayTitle ? t.matchdayTitle.replace("{number}", String(match.matchday)) : `Journée ${match.matchday}`)
+      : (t.matchdayUnknown || "Prochaines rencontres");
+
+    return (
+      <Card
+        key={match.unifiedId}
+        className="relative overflow-hidden border-none bg-slate-950 text-slate-100 shadow-[0_35px_100px_-40px_rgba(16,185,129,0.75)]"
+      >
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.35),transparent_60%)]" />
+          <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(59,130,246,0.12),rgba(16,185,129,0.12),transparent)]" />
+          <div className="absolute inset-y-0 left-1/2 hidden w-px -translate-x-1/2 bg-white/10 md:block" />
+        </div>
+        <CardHeader className="relative z-10 space-y-6 pb-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-[0.35em] text-emerald-200/70">
+            <div className="flex items-center gap-2">
+              <CalendarDays className="size-3.5 text-emerald-200" />
+              <span>{competitionLabel}</span>
+              <ChevronRight className="size-3 text-emerald-200/80" />
+              <span>{matchdayLabel}</span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.3em] text-slate-300/80">
+              <Clock className="size-3 text-emerald-200/80" />
               {formatMatchDate(match.startAt)}
             </div>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-[1fr_auto_1fr] md:items-center">
-            <div className="flex flex-col items-center gap-3 text-center">
-              {match.homeCrest ? (
-                <Image
-                  src={match.homeCrest}
-                  alt={match.homeTeam}
-                  width={56}
-                  height={56}
-                  className="size-14 rounded-full border border-slate-200 bg-white object-contain p-1"
-                />
-              ) : (
-                <div className="size-14 rounded-full border border-dashed border-slate-200 bg-slate-50" />
-              )}
-              <span className="text-sm font-semibold text-slate-700 max-w-[140px]">
-                {match.homeTeam}
-              </span>
-            </div>
-            <div className="flex flex-col items-center gap-2 text-sm text-muted-foreground">
-              <span className="text-xs uppercase tracking-widest text-muted-foreground">vs</span>
-              {tab === "upcoming" ? (
-                <Badge className="gap-1 bg-emerald-100 text-emerald-700">
-                  <Users className="size-3" />
-                  {timeUntilMatch(match.startAt)}
-                </Badge>
-              ) : (
-                <Badge className="gap-1 bg-slate-200 text-slate-600">
-                  {t.matchFinished || "Terminé"}
-                </Badge>
-              )}
-            </div>
-            <div className="flex flex-col items-center gap-3 text-center">
-              {match.awayCrest ? (
-                <Image
-                  src={match.awayCrest}
-                  alt={match.awayTeam}
-                  width={56}
-                  height={56}
-                  className="size-14 rounded-full border border-slate-200 bg-white object-contain p-1"
-                />
-              ) : (
-                <div className="size-14 rounded-full border border-dashed border-slate-200 bg-slate-50" />
-              )}
-              <span className="text-sm font-semibold text-slate-700 max-w-[140px]">
-                {match.awayTeam}
-              </span>
+          <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-6 shadow-inner backdrop-blur-sm">
+            <div className="grid gap-6 md:grid-cols-[1fr_auto_1fr] md:items-center">
+              <div className="flex flex-col items-center gap-4 text-center md:items-start md:text-left">
+                {match.homeCrest ? (
+                  <Image
+                    src={match.homeCrest}
+                    alt={match.homeTeam}
+                    width={64}
+                    height={64}
+                    className="size-16 rounded-full border border-white/20 bg-white/70 object-contain p-2 shadow-[0_18px_35px_rgba(16,185,129,0.35)]"
+                  />
+                ) : (
+                  <div className="size-16 rounded-full border border-dashed border-white/20 bg-white/10" />
+                )}
+                <span className="text-lg font-semibold uppercase tracking-wide text-emerald-50 sm:text-2xl">
+                  {match.homeTeam}
+                </span>
+              </div>
+              <div className="flex flex-col items-center gap-3">
+                <span className="text-[10px] uppercase tracking-[0.45em] text-emerald-200/70">vs</span>
+                <span
+                  className={`rounded-full border px-4 py-1 text-[11px] font-semibold uppercase tracking-[0.4em] ${tab === "upcoming"
+                    ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100"
+                    : "border-white/20 bg-white/10 text-slate-200/85"
+                  }`}
+                >
+                  {tab === "upcoming" ? timeUntilMatch(match.startAt) : (t.matchFinished || "Terminé")}
+                </span>
+              </div>
+              <div className="flex flex-col items-center gap-4 text-center md:items-end md:text-right">
+                {match.awayCrest ? (
+                  <Image
+                    src={match.awayCrest}
+                    alt={match.awayTeam}
+                    width={64}
+                    height={64}
+                    className="size-16 rounded-full border border-white/20 bg-white/70 object-contain p-2 shadow-[0_18px_35px_rgba(59,130,246,0.25)]"
+                  />
+                ) : (
+                  <div className="size-16 rounded-full border border-dashed border-white/20 bg-white/10" />
+                )}
+                <span className="text-lg font-semibold uppercase tracking-wide text-emerald-50 sm:text-2xl">
+                  {match.awayTeam}
+                </span>
+              </div>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="relative z-10 space-y-5 pt-6">
           {match.leagues.map((entry) => {
             const key = createPredictionKey(entry.matchId, entry.leagueId);
             const prediction = predictionStates[key] ?? { homeScore: "", awayScore: "", confident: false };
@@ -955,14 +1179,14 @@ export function MatchBetting({
             return (
               <div
                 key={key}
-                className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm"
+                className="rounded-2xl border border-white/10 bg-slate-950/60 p-5 shadow-[0_25px_60px_-40px_rgba(16,185,129,0.7)] backdrop-blur"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-800">
+                    <p className="text-sm font-semibold uppercase tracking-[0.3em] text-emerald-100/85">
                       {entry.leagueName}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-slate-300/70">
                       {entry.locked
                         ? (t.predictionLocked || "Pronostic verrouillé")
                         : (t.predictionOpen || "Pronostic ouvert")}
@@ -974,7 +1198,7 @@ export function MatchBetting({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-2"
+                        className="h-9 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 text-emerald-100 transition hover:bg-emerald-500/20 hover:text-emerald-50"
                         onClick={() => copyPredictionAcrossLeagues(match, entry.leagueId)}
                       >
                         <Copy className="size-3.5" />
@@ -984,83 +1208,94 @@ export function MatchBetting({
                   </div>
                 </div>
 
-                <Separator className="my-4" />
-
-                {tab === "upcoming" ? (
-                  <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-end">
-                    <div className="flex flex-col items-center gap-2 text-center md:items-start md:text-left">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        {match.homeTeam}
-                      </span>
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        min={0}
-                        max={99}
-                        value={prediction.homeScore}
-                        onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "home", event.target.value)}
-                        onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
-                        disabled={entry.locked}
-                        className="w-full max-w-[120px] text-center text-lg"
-                      />
+                <div className="mt-5 border-t border-white/10 pt-5">
+                  {tab === "upcoming" ? (
+                    <div className="grid gap-5 md:grid-cols-[1fr_auto_1fr] md:items-end">
+                      <div className="flex flex-col gap-3 text-left md:items-start">
+                        <span className="text-[11px] uppercase tracking-[0.4em] text-emerald-200/70">
+                          {match.homeTeam}
+                        </span>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          min={0}
+                          max={99}
+                          value={prediction.homeScore}
+                          onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "home", event.target.value)}
+                          onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
+                          disabled={entry.locked}
+                          className="h-16 w-24 rounded-2xl border border-emerald-500/40 bg-slate-950/70 text-center text-3xl font-semibold text-emerald-50 shadow-[0_15px_35px_-18px_rgba(16,185,129,0.7)] focus-visible:border-emerald-300 focus-visible:ring-emerald-200/60 focus-visible:ring-4 disabled:opacity-60"
+                        />
+                      </div>
+                      <div className="flex flex-col items-center gap-2 text-xs text-emerald-200/70">
+                        <span className="text-[10px] uppercase tracking-[0.45em] text-emerald-200/60">
+                          {t.predictionSeparator || "Score"}
+                        </span>
+                        <span className="text-5xl font-black leading-none text-emerald-300/80 drop-shadow-[0_0_35px_rgba(16,185,129,0.45)]">
+                          -
+                        </span>
+                        <span
+                          className={`text-[10px] uppercase tracking-[0.35em] ${entry.locked ? "text-rose-200/70" : "text-slate-300/70"}`}
+                        >
+                          {entry.locked
+                            ? (t.predictionLocked || "Pronostic verrouillé")
+                            : (t.predictionOpen || "Pronostic ouvert")}
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-3 text-right md:items-end">
+                        <span className="text-[11px] uppercase tracking-[0.4em] text-emerald-200/70">
+                          {match.awayTeam}
+                        </span>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          min={0}
+                          max={99}
+                          value={prediction.awayScore}
+                          onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "away", event.target.value)}
+                          onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
+                          disabled={entry.locked}
+                          className="h-16 w-24 rounded-2xl border border-emerald-500/40 bg-slate-950/70 text-center text-3xl font-semibold text-emerald-50 shadow-[0_15px_35px_-18px_rgba(16,185,129,0.7)] focus-visible:border-emerald-300 focus-visible:ring-emerald-200/60 focus-visible:ring-4 disabled:opacity-60"
+                        />
+                      </div>
                     </div>
-                    <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
-                      <span>{t.predictionSeparator || "Score"}</span>
-                      <Separator orientation="vertical" className="h-10" />
-                    </div>
-                    <div className="flex flex-col items-center gap-2 text-center md:items-end md:text-right">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        {match.awayTeam}
-                      </span>
-                      <Input
-                        type="number"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        min={0}
-                        max={99}
-                        value={prediction.awayScore}
-                        onChange={(event) => handleScoreChange(entry.matchId, entry.leagueId, "away", event.target.value)}
-                        onBlur={() => handleBlur(entry.matchId, entry.leagueId)}
-                        disabled={entry.locked}
-                        className="w-full max-w-[120px] text-center text-lg"
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
-                    <div className="rounded-lg bg-slate-50 p-4 text-sm md:text-left">
-                      <p className="text-xs font-semibold uppercase text-muted-foreground">
-                        {t.yourPrediction || "Ton pronostic"}
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-slate-800">
-                        {prediction.homeScore !== "" && prediction.awayScore !== ""
-                          ? `${prediction.homeScore} - ${prediction.awayScore}`
-                          : t.predictionMissing || "Non renseigné"}
-                      </p>
-                      {meta?.points != null ? (
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          {t.pointsEarned
-                            ? t.pointsEarned.replace("{points}", String(meta.points))
-                            : `Points gagnés : ${meta.points}`}
+                  ) : (
+                    <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm">
+                        <p className="text-[11px] uppercase tracking-[0.35em] text-emerald-200/70">
+                          {t.yourPrediction || "Ton pronostic"}
                         </p>
-                      ) : null}
+                        <p className="mt-2 text-2xl font-semibold text-white">
+                          {prediction.homeScore !== "" && prediction.awayScore !== ""
+                            ? `${prediction.homeScore} - ${prediction.awayScore}`
+                            : t.predictionMissing || "Non renseigné"}
+                        </p>
+                        {meta?.points != null ? (
+                          <p className="mt-3 text-xs text-emerald-200/80">
+                            {t.pointsEarned
+                              ? t.pointsEarned.replace("{points}", String(meta.points))
+                              : `Points gagnés : ${meta.points}`}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center justify-center">
+                        <div className="h-16 w-px bg-white/15" />
+                      </div>
+                      <div className="rounded-xl border border-dashed border-white/15 p-4 text-right text-sm">
+                        <p className="text-[11px] uppercase tracking-[0.35em] text-emerald-200/70">
+                          {t.finalScore || "Score final"}
+                        </p>
+                        <p className="mt-2 text-2xl font-semibold text-white">
+                          {entry.matchHomeScore != null && entry.matchAwayScore != null
+                            ? `${entry.matchHomeScore} - ${entry.matchAwayScore}`
+                            : t.finalScorePending || "En attente"}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex items-center justify-center">
-                      <Separator orientation="vertical" className="h-16" />
-                    </div>
-                    <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm md:text-right">
-                      <p className="text-xs font-semibold uppercase text-muted-foreground">
-                        {t.finalScore || "Score final"}
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-slate-800">
-                        {entry.matchHomeScore != null && entry.matchAwayScore != null
-                          ? `${entry.matchHomeScore} - ${entry.matchAwayScore}`
-                          : t.finalScorePending || "En attente"}
-                      </p>
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             );
           })}
